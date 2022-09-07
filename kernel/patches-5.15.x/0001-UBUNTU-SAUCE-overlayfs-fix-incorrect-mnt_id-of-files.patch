@@ -1,0 +1,133 @@
+From 74d43ba861ef5374a3474067f7f856366943a013 Mon Sep 17 00:00:00 2001
+From: Alexander Mikhalitsyn <alexander@mihalicyn.com>
+Date: Thu, 14 Apr 2022 17:57:56 +0200
+Subject: [PATCH 1/5] UBUNTU: SAUCE: overlayfs: fix incorrect mnt_id of files
+ opened from map_files
+
+BugLink: https://bugs.launchpad.net/bugs/1967924
+BugLink: https://bugs.launchpad.net/bugs/1857257
+
+The hack was introduced in ("UBUNTU: SAUCE: overlayfs: allow with
+shiftfs as underlay") and it broke checkpoint/restore of docker
+contains:
+https://bugs.launchpad.net/ubuntu/+source/linux/+bug/1857257
+
+The following script can be used to trigger the issue:
+  #!/bin/bash
+
+  cat > test.py << EOF
+  import sys
+
+  f = open("/proc/self/maps")
+
+  for l in f.readlines():
+    if "python" not in l:
+      continue
+    print(l)
+    s = l.split()
+    start, end = s[0].split("-")
+    fname = s[-1]
+    print(start, end, fname)
+    break
+  else:
+    sys.exit(1)
+
+  test_file1 = open(fname)
+  test_file2 = open("/proc/self/map_files/%s-%s" % (start, end))
+
+  fdinfo1 = open("/proc/self/fdinfo/%d" % test_file1.fileno()).read()
+  fdinfo2 = open("/proc/self/fdinfo/%d" % test_file2.fileno()).read()
+
+  if fdinfo1 != fdinfo2:
+    print("FAIL")
+    print(test_file1)
+    print(fdinfo1)
+    print(test_file2)
+    print(fdinfo2)
+    sys.exit(1)
+  print("PASS")
+  EOF
+  sudo docker run -it --privileged --rm -v `pwd`:/mnt python python /mnt/test.py
+
+Thanks to Andrei Vagin for the reproducer and investigation of this problem.
+
+Cc: Andrei Vagin <avagin@gmail.com>
+Cc: Adrian Reber <areber@redhat.com>
+Cc: Christian Brauner <christian.brauner@ubuntu.com>
+Cc: Stefan Bader <stefan.bader@canonical.com>
+Cc: Kleber Sacilotto de Souza <kleber.souza@canonical.com>
+Cc: Krzysztof Kozlowski <krzysztof.kozlowski@canonical.com>
+
+Fixes: d24b8a5 ("UBUNTU: SAUCE: overlayfs: allow with shiftfs as underlay")
+Signed-off-by: Alexander Mikhalitsyn <alexander@mihalicyn.com>
+Acked-by: Seth Forshee <seth.forshee@canonical.com>
+Acked-by: Stefan Bader <stefan.bader@canonical.com>
+Acked-by: Krzysztof Kozlowski <krzysztof.kozlowski@canonical.com>
+Signed-off-by: Kelsey Skunberg <kelsey.skunberg@canonical.com>
+[small refactoring to add the dependency of AUFS for vma->vm_prfile]
+Signed-off-by: Andrea Righi <andrea.righi@canonical.com>
+Signed-off-by: Paolo Pisati <paolo.pisati@canonical.com>
+---
+ fs/overlayfs/file.c | 39 +++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 39 insertions(+)
+
+diff --git a/fs/overlayfs/file.c b/fs/overlayfs/file.c
+index 44fea16751f1..2cb23971e264 100644
+--- a/fs/overlayfs/file.c
++++ b/fs/overlayfs/file.c
+@@ -488,6 +488,41 @@ static int ovl_fsync(struct file *file, loff_t start, loff_t end, int datasync)
+ 	return ret;
+ }
+ 
++#if IS_ENABLED(CONFIG_AUFS_FS)
++/*
++ * In map_files_get_link() (fs/proc/base.c)
++ * we need to determine correct path from overlayfs.
++ * But real_mount(realfile->f_path.mnt) may be not
++ * equal to real_mount(file->f_path.mnt). In such case
++ * fdinfo of the same file which was opened from
++ * /proc/<pid>/map_files/... and "usual" path
++ * will show different mnt_id.
++ *
++ * We solve issue like in aufs by using additional
++ * field on struct vm_area_struct called "vm_prfile"
++ * which is used only for fdinfo/"printing" needs.
++ *
++ * See also mm/prfile.c
++ */
++static void ovl_vm_prfile_set(struct vm_area_struct *vma,
++			      struct file *file)
++{
++	get_file(file);
++	vma->vm_prfile = file;
++#ifndef CONFIG_MMU
++	get_file(file);
++	vma->vm_region->vm_prfile = file;
++#endif
++	/* Drop reference count from previous vm_file value */
++	fput(file);
++}
++#else /* !CONFIG_AUFS_FS */
++static void ovl_vm_prfile_set(struct vm_area_struct *vma,
++			      struct file *file)
++{
++}
++#endif/* CONFIG_AUFS_FS */
++
+ static int ovl_mmap(struct file *file, struct vm_area_struct *vma)
+ {
+ 	struct file *realfile = file->private_data;
+@@ -505,6 +540,10 @@ static int ovl_mmap(struct file *file, struct vm_area_struct *vma)
+ 	old_cred = ovl_override_creds(file_inode(file)->i_sb);
+ 	ret = call_mmap(vma->vm_file, vma);
+ 	revert_creds(old_cred);
++
++	if (!ret)
++		ovl_vm_prfile_set(vma, file);
++
+ 	ovl_file_accessed(file);
+ 
+ 	return ret;
+-- 
+2.34.1
+

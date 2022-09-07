@@ -1,0 +1,116 @@
+From 88a222fe4b4eea507479d3c5361104d262928bc9 Mon Sep 17 00:00:00 2001
+From: Christian Brauner <christian.brauner@ubuntu.com>
+Date: Wed, 2 Oct 2019 09:58:20 +0200
+Subject: [PATCH 4/5] UBUNTU: SAUCE: overlayfs: allow with shiftfs as underlay
+
+BugLink: https://bugs.launchpad.net/bugs/1846272
+
+In commit [1] we enabled overlayfs on top of shiftfs. This approach was
+buggy since it let to a regression for some standard overlayfs workloads
+(cf. [2]).
+In our original approach in [1] Seth and I concluded that running
+overlayfs on top of shiftfs was not possible because of the way
+overlayfs is currently opening files. The fact that it did not pass down
+the dentry of shiftfs but rather it's own caused shiftfs to be confused
+since it stashes away necessary information in d_fsdata.
+Our solution was to modify open_with_fake_path() to also take a dentry
+as an argument, then change overlayfs to pass in the shiftfs dentry
+which then would override the dentry in the passed in struct path in
+open_with_fake_path().
+However, this led to a regression for some standard overlayfs workloads
+(cf. [2]).
+After various discussions involving Seth and myself in Paris we
+concluded the reason for the regression was that we effectively created
+a struct path that was comprised of the vfsmount of the overlayfs dentry
+and the dentry of shiftfs. This is obviously broken.
+The fix is to a) not modify open_with_fake_path() and b) change
+overlayfs to do what shiftfs is doing, namely correctly setup the struct
+path such that vfsmount and dentry match and are both from shiftfs.
+Note, that overlayfs already does this for the .open method for
+directories. It just did not do it for the .open method for regular
+files leading to this issue. The reason why this hasn't been a problem
+for overlayfs so far is that it didn't allow running on top of
+filesystems that make use of d_fsdata _implicitly_ by disallowing any
+filesystem that is itself an overlay, or has revalidate methods for it's
+dentries as those usually have d_fsdata set up. Any other filesystem
+falling in this category would have suffered from the same problem.
+
+Seth managed to trigger the regression with the following script:
+ #!/bin/bash
+
+ utils=(bash cat)
+
+ mkdir -p lower/proc upper work root
+ for util in ${utils[@]}; do
+ 	path="$(which $util)"
+ 	dir="$(dirname $path)"
+ 	mkdir -p "lower/$dir"
+ 	cp -v "$path" "lower/$path"
+ 	libs="$(ldd $path | egrep -o '(/usr)?/lib.*\.[0-9]')"
+ 	for lib in $libs; do
+ 		dir="$(dirname $lib)"
+ 		mkdir -p "lower/$dir"
+ 		cp -v "$lib" "lower/$lib"
+ 	done
+ done
+
+ mount -t overlay -o lowerdir=lower,upperdir=upper,workdir=work nodev root
+ mount -t proc nodev root/proc
+ chroot root bash -c "cat /proc/self/maps"
+ umount root/proc
+ umount root
+
+With the patch here applied the regression is not reproducible.
+
+/* References */
+[1]: 37430e430a14 ("UBUNTU: SAUCE: shiftfs: enable overlayfs on shiftfs")
+[2]: https://bugs.launchpad.net/bugs/1838677
+
+Signed-off-by: Christian Brauner <christian.brauner@ubuntu.com>
+Acked-by: Stefan Bader <stefan.bader@canonical.com>
+Acked-by: Connor Kuehl <connor.kuehl@canonical.com>
+Signed-off-by: Seth Forshee <seth.forshee@canonical.com>
+---
+ fs/overlayfs/file.c  | 4 +++-
+ fs/overlayfs/super.c | 3 ++-
+ 2 files changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/fs/overlayfs/file.c b/fs/overlayfs/file.c
+index 33e3ec609fa9..7024771dcae8 100644
+--- a/fs/overlayfs/file.c
++++ b/fs/overlayfs/file.c
+@@ -40,6 +40,7 @@ static char ovl_whatisit(struct inode *inode, struct inode *realinode)
+ static struct file *ovl_open_realfile(const struct file *file,
+ 				      struct inode *realinode)
+ {
++	struct path realpath;
+ 	struct inode *inode = file_inode(file);
+ 	struct file *realfile;
+ 	const struct cred *old_cred;
+@@ -58,7 +59,8 @@ static struct file *ovl_open_realfile(const struct file *file,
+ 		if (!inode_owner_or_capable(&init_user_ns, realinode))
+ 			flags &= ~O_NOATIME;
+ 
+-		realfile = open_with_fake_path(&file->f_path, flags, realinode,
++		ovl_path_real(file->f_path.dentry, &realpath);
++		realfile = open_with_fake_path(&realpath, flags, realinode,
+ 					       current_cred());
+ 	}
+ 	revert_creds(old_cred);
+diff --git a/fs/overlayfs/super.c b/fs/overlayfs/super.c
+index 7bb0a47cb615..8e8522637319 100644
+--- a/fs/overlayfs/super.c
++++ b/fs/overlayfs/super.c
+@@ -898,7 +898,8 @@ static int ovl_mount_dir(const char *name, struct path *path)
+ 		ovl_unescape(tmp);
+ 		err = ovl_mount_dir_noesc(tmp, path);
+ 
+-		if (!err && path->dentry->d_flags & DCACHE_OP_REAL) {
++		if (!err && (path->dentry->d_flags & DCACHE_OP_REAL &&
++			     path->dentry->d_sb->s_magic != SHIFTFS_MAGIC)) {
+ 			pr_err("filesystem on '%s' not supported as upperdir\n",
+ 			       tmp);
+ 			path_put_init(path);
+-- 
+2.34.1
+

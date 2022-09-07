@@ -1,0 +1,26 @@
+From 9e2f6f47dc94ceb7b156f28e7ece3d0975f01adc Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Fr=C3=A9d=C3=A9ric=20Dalleau?= <frederic.dalleau@docker.com>
+Date: Wed, 7 Sep 2022 11:56:38 +0200
+Subject: [PATCH 5/5] DOCKER SAUCE Define SHIFTFS_MAGIC
+
+---
+ fs/overlayfs/super.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/fs/overlayfs/super.c b/fs/overlayfs/super.c
+index 8e8522637319..2166e502453e 100644
+--- a/fs/overlayfs/super.c
++++ b/fs/overlayfs/super.c
+@@ -21,6 +21,9 @@ MODULE_AUTHOR("Miklos Szeredi <miklos@szeredi.hu>");
+ MODULE_DESCRIPTION("Overlay filesystem");
+ MODULE_LICENSE("GPL");
+ 
++#ifndef SHIFTFS_MAGIC
++#define SHIFTFS_MAGIC 0x6a656a62
++#endif
+ 
+ struct ovl_dir_cache;
+ 
+-- 
+2.34.1
+

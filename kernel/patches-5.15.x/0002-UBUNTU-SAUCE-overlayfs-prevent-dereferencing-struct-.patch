@@ -1,0 +1,88 @@
+From ed980a44e302a1cc9e07dc1cfc60876f81bb349c Mon Sep 17 00:00:00 2001
+From: Andrea Righi <andrea.righi@canonical.com>
+Date: Mon, 16 May 2022 17:36:00 +0200
+Subject: [PATCH 2/5] UBUNTU: SAUCE: overlayfs: prevent dereferencing struct
+ file in ovl_vm_prfile_set()
+
+BugLink: https://bugs.launchpad.net/bugs/1973620
+
+With the following commit we re-introduced a SAUCE patch that has been
+dropped starting with 5.13:
+
+ 37e9bac9203b ("UBUNTU: SAUCE: overlayfs: fix incorrect mnt_id of files opened from map_files")
+
+However the forward-ported patch introduced a potential NULL pointer
+dereference bug:
+
+BUG: kernel NULL pointer dereference, address: 0000000000000008
+[  447.039738] #PF: supervisor read access in kernel mode
+[  447.040369] #PF: error_code(0x0000) - not-present page
+[  447.041002] PGD 0 P4D 0
+[  447.041325] Oops: 0000 [#1] SMP NOPTI
+[  447.041798] CPU: 0 PID: 73766 Comm: sudo Not tainted 5.15.0-28-generic #29~20.04.1-Ubuntu
+[  447.042800] Hardware name: OpenStack Foundation OpenStack Nova, BIOS Ubuntu-1.8.2-1ubuntu1+esm1 04/01/2014
+[  447.043979] RIP: 0010:aa_file_perm+0x3a/0x470
+[  447.044565] Code: 54 53 48 83 ec 68 48 89 7d 80 89 4d 8c 65 48 8b 04 25 28 00 00 00 48 89 45 d0 31 c0 48 63 05 01 0a 19 01 48 03 82 c0 00 00 00 <4c> 8b 68 08 f6 46 40 02 0f 85 d0 00 00 00 41 f6 45 40 02 0f 85 c5
+[  447.046837] RSP: 0018:ffffaefe80a4bca8 EFLAGS: 00010246
+[  447.047481] RAX: 0000000000000000 RBX: ffff96e4038abd01 RCX: 0000000000000004
+[  447.048351] RDX: ffff96e4038abd00 RSI: ffff96e401215eb8 RDI: ffffffff9c22a2ac
+[  447.049241] RBP: ffffaefe80a4bd38 R08: 0000000000000000 R09: 0000000000000000
+[  447.050121] R10: 0000000000000000 R11: 0000000000000000 R12: ffff96e401215eb8
+[  447.051040] R13: ffff96e4038abd00 R14: ffffffff9c22a2ac R15: 0000000000000004
+[  447.051942] FS:  00007eff3c0f8c80(0000) GS:ffff96e45e400000(0000) knlGS:0000000000000000
+[  447.052981] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  447.053696] CR2: 0000000000000008 CR3: 0000000002be2000 CR4: 00000000003506f0
+[  447.054571] Call Trace:
+[  447.054883]  <TASK>
+[  447.055154]  ? unlock_page_memcg+0x2f/0x40
+[  447.055668]  ? page_remove_rmap+0x4b/0x320
+[  447.056180]  common_file_perm+0x72/0x170
+[  447.056669]  apparmor_file_permission+0x1c/0x20
+[  447.057237]  security_file_permission+0x30/0x1a0
+[  447.057898]  rw_verify_area+0x35/0x60
+[  447.058392]  vfs_read+0x6d/0x1a0
+[  447.058842]  ksys_read+0xb1/0xe0
+[  447.059276]  __x64_sys_read+0x1a/0x20
+[  447.059732]  do_syscall_64+0x5c/0xc0
+[  447.060183]  ? __set_current_blocked+0x3b/0x60
+[  447.060738]  ? exit_to_user_mode_prepare+0x3d/0x1c0
+[  447.061434]  ? syscall_exit_to_user_mode+0x27/0x50
+[  447.062099]  ? do_syscall_64+0x69/0xc0
+[  447.062603]  ? irqentry_exit_to_user_mode+0x9/0x20
+[  447.063210]  ? irqentry_exit+0x19/0x30
+[  447.063678]  ? exc_page_fault+0x89/0x160
+[  447.064165]  ? asm_exc_page_fault+0x8/0x30
+[  447.064675]  entry_SYSCALL_64_after_hwframe+0x44/0xae
+[  447.065298] RIP: 0033:0x7eff3c2cb002
+
+This panic happens only when AUFS is enabled (that is required to
+"activates" this feature).
+
+This bug happens because we don't need to decrement anymore the refcount
+for the previous vm_file value in ovl_vm_prfile_set(). So make sure to
+drop the offending fput() to prevent the kernel panic above.
+
+Signed-off-by: Andrea Righi <andrea.righi@canonical.com>
+Acked-by: Kleber Sacilotto de Souza <kleber.souza@canonical.com>
+Acked-by: Stefan Bader <stefan.bader@canonical.com>
+Signed-off-by: Kleber Sacilotto de Souza <kleber.souza@canonical.com>
+---
+ fs/overlayfs/file.c | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/fs/overlayfs/file.c b/fs/overlayfs/file.c
+index 2cb23971e264..a60cfb20630e 100644
+--- a/fs/overlayfs/file.c
++++ b/fs/overlayfs/file.c
+@@ -513,8 +513,6 @@ static void ovl_vm_prfile_set(struct vm_area_struct *vma,
+ 	get_file(file);
+ 	vma->vm_region->vm_prfile = file;
+ #endif
+-	/* Drop reference count from previous vm_file value */
+-	fput(file);
+ }
+ #else /* !CONFIG_AUFS_FS */
+ static void ovl_vm_prfile_set(struct vm_area_struct *vma,
+-- 
+2.34.1
+
