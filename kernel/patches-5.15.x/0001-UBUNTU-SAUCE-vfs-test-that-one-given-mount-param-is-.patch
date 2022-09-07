@@ -1,0 +1,35 @@
+From 796fe8290349ef4cd8719a68966893c1c1b5a677 Mon Sep 17 00:00:00 2001
+From: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+Date: Wed, 12 Jan 2022 09:26:20 -0300
+Subject: [PATCH] UBUNTU: SAUCE: vfs: test that one given mount param is not
+ larger than PAGE_SIZE
+
+In order to avoid potential overflows, test that one given mount parameter
+is not larger than PAGE_SIZE when parsing it through legacy_parse_param.
+
+Suggested-by: Stefan Bader <stefan.bader@canonical.com>
+Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+CVE-2022-0185
+Acked-by: Andy Whitcroft <andy.whitcroft@canonical.com>
+Acked-by: Ben Romer <ben.romer@canonical.com>
+Signed-off-by: Andrea Righi <andrea.righi@canonical.com>
+---
+ fs/fs_context.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/fs/fs_context.c b/fs/fs_context.c
+index 24ce12f0db32..483a4d9273e3 100644
+--- a/fs/fs_context.c
++++ b/fs/fs_context.c
+@@ -548,7 +548,7 @@ static int legacy_parse_param(struct fs_context *fc, struct fs_parameter *param)
+ 			      param->key);
+ 	}
+ 
+-	if (size + len + 2 > PAGE_SIZE)
++	if (len > PAGE_SIZE || size + len + 2 > PAGE_SIZE)
+ 		return invalf(fc, "VFS: Legacy: Cumulative options too large");
+ 	if (strchr(param->key, ',') ||
+ 	    (param->type == fs_value_is_string &&
+-- 
+2.32.0 (Apple Git-132)
+
