@@ -45,6 +45,7 @@ type QemuConfig struct {
 	UUID           uuid.UUID
 	USB            bool
 	Devices        []string
+	VirtiofsShares []string
 }
 
 const (
@@ -119,23 +120,24 @@ func generateMAC() net.HardwareAddr {
 
 func runQEMUCmd() *cobra.Command {
 	var (
-		enableGUI    bool
-		uefiBoot     bool
-		isoBoot      bool
-		squashFSBoot bool
-		kernelBoot   bool
-		state        string
-		data         string
-		dataPath     string
-		fw           string
-		accel        string
-		arch         string
-		qemuCmd      string
-		qemuDetached bool
-		networking   string
-		usbEnabled   bool
-		deviceFlags  multipleFlag
-		publishFlags multipleFlag
+		enableGUI      bool
+		uefiBoot       bool
+		isoBoot        bool
+		squashFSBoot   bool
+		kernelBoot     bool
+		state          string
+		data           string
+		dataPath       string
+		fw             string
+		accel          string
+		arch           string
+		qemuCmd        string
+		qemuDetached   bool
+		networking     string
+		usbEnabled     bool
+		deviceFlags    multipleFlag
+		publishFlags   multipleFlag
+		virtiofsShares []string
 	)
 
 	cmd := &cobra.Command{
@@ -300,6 +302,7 @@ func runQEMUCmd() *cobra.Command {
 				UUID:           vmUUID,
 				USB:            usbEnabled,
 				Devices:        deviceFlags,
+				VirtiofsShares: virtiofsShares,
 			}
 
 			config, err = discoverBinaries(config)
@@ -351,6 +354,9 @@ func runQEMUCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&usbEnabled, "usb", false, "Enable USB controller")
 	cmd.Flags().Var(&deviceFlags, "device", "Add USB host device(s). Format driver[,prop=value][,...] -- add device, like -device on the qemu command line.")
 
+	// Filesystems
+	cmd.Flags().StringArrayVar(&virtiofsShares, "virtiofs", []string{}, "Directory shared on virtiofs")
+
 	return cmd
 }
 
@@ -396,6 +402,27 @@ func runQemuLocal(config QemuConfig) error {
 	// Detached mode is only supported in a container.
 	if config.Detached {
 		return fmt.Errorf("Detached mode is only supported when running in a container, not locally")
+	}
+
+	if len(config.VirtiofsShares) > 0 {
+		args = append(args, "-object", "memory-backend-memfd,id=mem,size="+config.Memory+"M,share=on", "-numa", "node,memdev=mem")
+	}
+	for index, source := range config.VirtiofsShares {
+		socket := fmt.Sprintf("%s%d", "/tmp/virtiofs", index)
+
+		cmd := exec.Command("/usr/lib/qemu/virtiofsd", "--socket-path="+socket,
+			"--socket-group="+"docker",
+			"-o", fmt.Sprintf("source=%s", source),
+			"-o", "cache=always",
+			"--thread-pool-size=4")
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("virtiofs server cannot start: %v", err)
+		}
+		args = append(args, "-chardev", fmt.Sprintf("socket,id=char%d,path=%s", index, socket))
+		args = append(args, "-device",
+			fmt.Sprintf("vhost-user-fs-pci,chardev=char%d,tag=virtiofs%d", index, index))
 	}
 
 	qemuCmd := exec.Command(config.QemuBinPath, args...)
