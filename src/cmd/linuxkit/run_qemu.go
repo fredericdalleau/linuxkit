@@ -419,7 +419,7 @@ func runQemuLocal(config QemuConfig) error {
 		args = append(args, "-object", "memory-backend-memfd,id=mem,size="+config.Memory+"M,share=on", "-numa", "node,memdev=mem")
 	}
 	for index, source := range config.VirtiofsShares {
-		socket := fmt.Sprintf("%s%d", "/tmp/virtiofs", index)
+		socket := filepath.Join(config.StatePath, fmt.Sprintf("%s%d", "virtiofs", index))
 
 		cmd := exec.Command(config.VirtiofsdBinPath,
 			"--socket-path="+socket,
