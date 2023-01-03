@@ -23,29 +23,30 @@ const (
 
 // QemuConfig contains the config for Qemu
 type QemuConfig struct {
-	Path           string
-	ISOBoot        bool
-	UEFI           bool
-	SquashFS       bool
-	Kernel         bool
-	GUI            bool
-	Disks          Disks
-	ISOImages      []string
-	StatePath      string
-	FWPath         string
-	Arch           string
-	CPUs           string
-	Memory         string
-	Accel          string
-	Detached       bool
-	QemuBinPath    string
-	QemuImgPath    string
-	PublishedPorts []string
-	NetdevConfig   string
-	UUID           uuid.UUID
-	USB            bool
-	Devices        []string
-	VirtiofsShares []string
+	Path             string
+	ISOBoot          bool
+	UEFI             bool
+	SquashFS         bool
+	Kernel           bool
+	GUI              bool
+	Disks            Disks
+	ISOImages        []string
+	StatePath        string
+	FWPath           string
+	Arch             string
+	CPUs             string
+	Memory           string
+	Accel            string
+	Detached         bool
+	QemuBinPath      string
+	QemuImgPath      string
+	PublishedPorts   []string
+	NetdevConfig     string
+	UUID             uuid.UUID
+	USB              bool
+	Devices          []string
+	VirtiofsdBinPath string
+	VirtiofsShares   []string
 }
 
 const (
@@ -137,6 +138,7 @@ func runQEMUCmd() *cobra.Command {
 		usbEnabled     bool
 		deviceFlags    multipleFlag
 		publishFlags   multipleFlag
+		virtiofsdCmd   string
 		virtiofsShares []string
 	)
 
@@ -281,33 +283,41 @@ func runQEMUCmd() *cobra.Command {
 			}
 
 			config := QemuConfig{
-				Path:           path,
-				ISOBoot:        isoBoot,
-				UEFI:           uefiBoot,
-				SquashFS:       squashFSBoot,
-				Kernel:         kernelBoot,
-				GUI:            enableGUI,
-				Disks:          disks,
-				ISOImages:      isoPaths,
-				StatePath:      state,
-				FWPath:         fw,
-				Arch:           arch,
-				CPUs:           fmt.Sprintf("%d", cpus),
-				Memory:         fmt.Sprintf("%d", mem),
-				Accel:          accel,
-				Detached:       qemuDetached,
-				QemuBinPath:    qemuCmd,
-				PublishedPorts: publishFlags,
-				NetdevConfig:   netdevConfig,
-				UUID:           vmUUID,
-				USB:            usbEnabled,
-				Devices:        deviceFlags,
-				VirtiofsShares: virtiofsShares,
+				Path:             path,
+				ISOBoot:          isoBoot,
+				UEFI:             uefiBoot,
+				SquashFS:         squashFSBoot,
+				Kernel:           kernelBoot,
+				GUI:              enableGUI,
+				Disks:            disks,
+				ISOImages:        isoPaths,
+				StatePath:        state,
+				FWPath:           fw,
+				Arch:             arch,
+				CPUs:             fmt.Sprintf("%d", cpus),
+				Memory:           fmt.Sprintf("%d", mem),
+				Accel:            accel,
+				Detached:         qemuDetached,
+				QemuBinPath:      qemuCmd,
+				PublishedPorts:   publishFlags,
+				NetdevConfig:     netdevConfig,
+				UUID:             vmUUID,
+				USB:              usbEnabled,
+				Devices:          deviceFlags,
+				VirtiofsdBinPath: virtiofsdCmd,
+				VirtiofsShares:   virtiofsShares,
 			}
 
-			config, err = discoverBinaries(config)
+			config, err = discoverQemu(config)
 			if err != nil {
 				return err
+			}
+
+			if len(config.VirtiofsShares) > 0 {
+				config, err = discoverVirtiofsd(config)
+				if err != nil {
+					return err
+				}
 			}
 
 			if err = runQemuLocal(config); err != nil {
@@ -355,6 +365,7 @@ func runQEMUCmd() *cobra.Command {
 	cmd.Flags().Var(&deviceFlags, "device", "Add USB host device(s). Format driver[,prop=value][,...] -- add device, like -device on the qemu command line.")
 
 	// Filesystems
+	cmd.Flags().StringVar(&virtiofsdCmd, "virtiofsd", "", "Path to virtiofsd binary (otherwise look in /usr/lib/qemu and /usr/local/lib/qemu)")
 	cmd.Flags().StringArrayVar(&virtiofsShares, "virtiofs", []string{}, "Directory shared on virtiofs")
 
 	return cmd
@@ -410,11 +421,9 @@ func runQemuLocal(config QemuConfig) error {
 	for index, source := range config.VirtiofsShares {
 		socket := fmt.Sprintf("%s%d", "/tmp/virtiofs", index)
 
-		cmd := exec.Command("/usr/lib/qemu/virtiofsd", "--socket-path="+socket,
-			"--socket-group="+"docker",
-			"-o", fmt.Sprintf("source=%s", source),
-			"-o", "cache=always",
-			"--thread-pool-size=4")
+		cmd := exec.Command(config.VirtiofsdBinPath,
+			"--socket-path="+socket,
+			"-o", fmt.Sprintf("source=%s", source))
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Start(); err != nil {
@@ -616,7 +625,7 @@ func buildQemuCmdline(config QemuConfig) (QemuConfig, []string) {
 	return config, qemuArgs
 }
 
-func discoverBinaries(config QemuConfig) (QemuConfig, error) {
+func discoverQemu(config QemuConfig) (QemuConfig, error) {
 	if config.QemuImgPath != "" {
 		return config, nil
 	}
@@ -635,6 +644,16 @@ func discoverBinaries(config QemuConfig) (QemuConfig, error) {
 		return config, fmt.Errorf("Unable to find %s within the $PATH", qemuImgPath)
 	}
 
+	return config, nil
+}
+
+func discoverVirtiofsd(config QemuConfig) (QemuConfig, error) {
+	if config.VirtiofsdBinPath != "" {
+		return config, nil
+	}
+
+	virtiofsdPath := filepath.Dir(config.QemuBinPath)
+	config.VirtiofsdBinPath = filepath.Join(virtiofsdPath, "..", "lib", "qemu", "virtiofsd")
 	return config, nil
 }
 
