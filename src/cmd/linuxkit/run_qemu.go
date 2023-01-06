@@ -47,6 +47,7 @@ type QemuConfig struct {
 	Devices          []string
 	VirtiofsdBinPath string
 	VirtiofsShares   []string
+	VirtiofsXattrmap []string
 }
 
 const (
@@ -121,25 +122,26 @@ func generateMAC() net.HardwareAddr {
 
 func runQEMUCmd() *cobra.Command {
 	var (
-		enableGUI      bool
-		uefiBoot       bool
-		isoBoot        bool
-		squashFSBoot   bool
-		kernelBoot     bool
-		state          string
-		data           string
-		dataPath       string
-		fw             string
-		accel          string
-		arch           string
-		qemuCmd        string
-		qemuDetached   bool
-		networking     string
-		usbEnabled     bool
-		deviceFlags    multipleFlag
-		publishFlags   multipleFlag
-		virtiofsdCmd   string
-		virtiofsShares []string
+		enableGUI        bool
+		uefiBoot         bool
+		isoBoot          bool
+		squashFSBoot     bool
+		kernelBoot       bool
+		state            string
+		data             string
+		dataPath         string
+		fw               string
+		accel            string
+		arch             string
+		qemuCmd          string
+		qemuDetached     bool
+		networking       string
+		usbEnabled       bool
+		deviceFlags      multipleFlag
+		publishFlags     multipleFlag
+		virtiofsdCmd     string
+		virtiofsShares   []string
+		virtiofsXattrmap []string
 	)
 
 	cmd := &cobra.Command{
@@ -306,6 +308,7 @@ func runQEMUCmd() *cobra.Command {
 				Devices:          deviceFlags,
 				VirtiofsdBinPath: virtiofsdCmd,
 				VirtiofsShares:   virtiofsShares,
+				VirtiofsXattrmap: virtiofsXattrmap,
 			}
 
 			config, err = discoverQemu(config)
@@ -367,6 +370,7 @@ func runQEMUCmd() *cobra.Command {
 	// Filesystems
 	cmd.Flags().StringVar(&virtiofsdCmd, "virtiofsd", "", "Path to virtiofsd binary (otherwise look in /usr/lib/qemu and /usr/local/lib/qemu)")
 	cmd.Flags().StringArrayVar(&virtiofsShares, "virtiofs", []string{}, "Directory shared on virtiofs")
+	cmd.Flags().StringArrayVar(&virtiofsXattrmap, "xattrmap", []string{}, "Virtiofs extended attributes mapping rule")
 
 	return cmd
 }
@@ -421,9 +425,18 @@ func runQemuLocal(config QemuConfig) error {
 	for index, source := range config.VirtiofsShares {
 		socket := filepath.Join(config.StatePath, fmt.Sprintf("%s%d", "virtiofs", index))
 
-		cmd := exec.Command(config.VirtiofsdBinPath,
-			"--socket-path="+socket,
-			"-o", fmt.Sprintf("source=%s", source))
+		args := []string{
+			"--socket-path=" + socket,
+			"-o", fmt.Sprintf("source=%s", source),
+		}
+		if len(config.VirtiofsXattrmap) > 0 {
+			xattrsopt := []string{
+				"-o", "xattr",
+				"-o", "xattrmap=" + strings.Join(config.VirtiofsXattrmap, ""),
+			}
+			args = append(args, xattrsopt...)
+		}
+		cmd := exec.Command(config.VirtiofsdBinPath, args...)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Start(); err != nil {
