@@ -1,4 +1,4 @@
-module github.com/linuxkit/linuxkit/src/cmd/linuxkit
+module github.com/fredericdalleau/linuxkit/src/cmd/linuxkit
 
 go 1.19
 
@@ -139,3 +139,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	oras.land/oras-go/v2 v2.0.0 // indirect
 )
+
