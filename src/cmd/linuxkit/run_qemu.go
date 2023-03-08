@@ -425,7 +425,7 @@ func runQemuLocal(config QemuConfig) error {
 	for index, source := range config.VirtiofsShares {
 		socket := filepath.Join(config.StatePath, fmt.Sprintf("%s%d", "virtiofs", index))
 
-		args := []string{
+		daemonargs := []string{
 			"--socket-path=" + socket,
 			"-o", fmt.Sprintf("source=%s", source),
 		}
@@ -434,9 +434,9 @@ func runQemuLocal(config QemuConfig) error {
 				"-o", "xattr",
 				"-o", "xattrmap=" + strings.Join(config.VirtiofsXattrmap, ""),
 			}
-			args = append(args, xattrsopt...)
+			daemonargs = append(daemonargs, xattrsopt...)
 		}
-		cmd := exec.Command(config.VirtiofsdBinPath, args...)
+		cmd := exec.Command(config.VirtiofsdBinPath, daemonargs...)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Start(); err != nil {
