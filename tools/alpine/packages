@@ -94,6 +94,7 @@ openssh-client
 openssh-server
 openssl
 openssl-dev
+pahole
 patch
 pigz
 python3
