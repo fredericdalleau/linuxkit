@@ -19,7 +19,7 @@ IMAGE?=kernel
 IMAGE_BCC:=kernel-bcc
 IMAGE_PERF:=kernel-perf
 IMAGE_ZFS:=zfs-kmod
-IMAGE_BUILDER=linuxkit/alpine:2be490394653b7967c250e86fd42cef88de428ba
+IMAGE_BUILDER=linuxkit/alpine:316c3f9d85c21fdd8bc7479e81d290f85bf60eb0
 
 # You can specify an extra options for the Makefile. This will:
 # - append a config$(EXTRA) to the kernel config for your kernel/arch
